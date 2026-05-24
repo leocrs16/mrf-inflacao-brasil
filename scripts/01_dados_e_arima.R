@@ -1,52 +1,37 @@
-rm(list = ls())
+# =============================================================
+# Previsão da Inflação Brasileira com MRF
+# SINAPE 2026
+# Autores: Leonardo Carvalho Ribeiro da Silva
+#          Hudson da Silva Torrent
+# =============================================================
 
-# Pacotes necessários
+# =============================================================
+# 0. Configuração
+# =============================================================
+rm(list = ls())
 
 library(dplyr)
 library(ipeadatar)
 library(lubridate)
 library(tidyr)
+library(rbcb)
+library(urca)
+library(tseries)
+library(forecast)
+library(purrr)
 
-##########################
-# Desemprego: PME (até 2015) + PNAD Contínua (2016 em diante)
-##########################
+# =============================================================
+# 1. Coleta de Dados
+# =============================================================
 
-# PME antiga (1996-2002)
-meta_pme1 <- metadata("PME12_TDA12")
-data_pme1 <- ipeadata(meta_pme1$code)
-df_pme1 <- data_pme1 %>%
-  pivot_wider(names_from = "code") %>%
-  select(-c(uname, tcode)) %>%
-  rename(desemprego = PME12_TDA12) %>%
-  filter(date <= as.Date("2002-12-01"))
-
-# PAN (2003-2015)
-meta_pme2 <- metadata("PAN12_TD12")
-data_pme2 <- ipeadata(meta_pme2$code)
-df_pme2 <- data_pme2 %>%
-  pivot_wider(names_from = "code") %>%
-  select(-c(uname, tcode)) %>%
-  rename(desemprego = PAN12_TD12) %>%
-  filter(date >= as.Date("2003-01-01") & date <= as.Date("2015-12-01"))
-
-# PNAD Contínua (2016-2025)
-meta_pnad <- metadata("PNADC12_TDESOCMD12")
-data_pnad <- ipeadata(meta_pnad$code)
-df_pnad <- data_pnad %>%
-  pivot_wider(names_from = "code") %>%
-  select(-c(uname, tcode)) %>%
-  rename(desemprego = PNADC12_TDESOCMD12) %>%
-  filter(date >= as.Date("2016-01-01"))
-
-# Combina as três
-df_desemprego <- bind_rows(df_pme1, df_pme2, df_pnad)
-
-
-# Séries MENSAIS
-
+# 1.1 - Séries mensais do Ipeadata
 codigos_mensais <- c(
-  "PRECOS12_IPCA12",  # IPCA
-  "BM12_TJOVER12"     # Selic
+  "PRECOS12_IPCA12",   # IPCA
+  "BM12_TJOVER12",     # Selic
+  "IFS12_BEEFB12",     # Carne
+  "IFS12_PETROLEUM12", # Petróleo
+  "IFS12_SOJAGP12",    # Soja
+  "GAC12_SALMINRE12"   # Salário mínimo real
 )
 
 metadados <- metadata(codigos_mensais)
@@ -58,11 +43,8 @@ df <- data %>%
 
 df <- df[order(df$date), ]
 
-##########################
-# Séries DIÁRIAS → MENSAL
-##########################
-
-# Função para converter série diária em mensal (média)
+# 1.2 - Séries diárias → mensais do Ipeadata
+# Câmbio é diário — converte para mensal via média
 diario_para_mensal <- function(codigo) {
   meta <- metadata(codigo)
   d    <- ipeadata(meta$code)
@@ -78,152 +60,120 @@ diario_para_mensal <- function(codigo) {
 
 df_cambio <- diario_para_mensal("GM366_ERV366") # Câmbio R$/US$
 
-##########################
-# Junta tudo
-##########################
-df <- df %>%
-  left_join(df_cambio,     by = "date") %>%
-  left_join(df_desemprego, by = "date")
+# 1.3 - Séries do Banco Central (SGS/BCB)
+# Puxamos as três séries e juntamos em um único dataframe
 
-##########################
-# Filtro de período
-##########################
+df_bcb <- rbcb::get_series(
+  c(13522, 7384, 27838, 1396),
+  start_date = "1996-01-01",
+  end_date   = "2025-12-01"
+) %>%
+  reduce(full_join, by = "date") %>%
+  rename(
+    exp_ipca        = `13522`, # Expectativa IPCA 12 meses (Focus)
+    result_primario = `7384`,  # Resultado primário do governo
+    agr_monetario   = `27838`, # Agregado monetário (variação %)
+    uci             = `1396`   # Utilização da capacidade instalada
+  )
+
+# 1.4 - Junta todas as fontes
+df <- df %>%
+  left_join(df_cambio, by = "date") %>%
+  left_join(df_bcb,    by = "date")
+
+# 1.5 - Filtro de período
 df_final <- df %>%
   filter(date >= as.Date("1996-01-01") & date <= as.Date("2025-12-01"))
 
-##########################
-# Diagnóstico geral
-##########################
+# 1.6 - Diagnóstico
 dim(df_final)
 names(df_final)
-head(df_final)
 colSums(is.na(df_final))
 
-# 1. Estrutura geral
-dim(df_final)    
-summary(df_final) # Checa mínimos e máximos - valores absurdos indicam problema
+# =============================================================
+# 2. Transformações para Estacionariedade
+# =============================================================
+# Log-diferença para séries de nível (índices e preços)
+# Diferença simples para séries que já são taxas
 
-# 2. Checa as emendas do desemprego
-# Emenda 1: 2002 → 2003 (PME antiga para PAN)
-df_final %>%
-  filter(date >= as.Date("2001-06-01") & date <= as.Date("2004-06-01")) %>%
-  select(date, desemprego) %>%
-  print(n = 36)
-
-# Emenda 2: 2015 → 2016 (PAN para PNAD)
-df_final %>%
-  filter(date >= as.Date("2014-06-01") & date <= as.Date("2017-06-01")) %>%
-  select(date, desemprego) %>%
-  print(n = 36)
-
-# 3. Checa valores extremos em cada série
-df_final %>%
-  summarise(
-    ipca_min  = min(PRECOS12_IPCA12),  ipca_max  = max(PRECOS12_IPCA12),
-    selic_min = min(BM12_TJOVER12),    selic_max = max(BM12_TJOVER12),
-    cambio_min= min(GM366_ERV366),     cambio_max= max(GM366_ERV366),
-    desemp_min= min(desemprego),       desemp_max= max(desemprego)
-  )
-
-df_final <- df_final %>% select(-desemprego)
-View(df_final)
-
-##########################
-# Transformações
-##########################
-library(urca)
-library(tseries)
-
-# Visualiza as séries brutas primeiro
-par(mfrow = c(3, 1))
-plot(df_final$date, df_final$PRECOS12_IPCA12, type = "l", main = "IPCA (nível)")
-plot(df_final$date, df_final$BM12_TJOVER12,   type = "l", main = "Selic (nível)")
-plot(df_final$date, df_final$GM366_ERV366,    type = "l", main = "Câmbio (nível)")
-par(mfrow = c(1, 1))
-
-# Aplica transformações
 df_transf <- df_final %>%
   mutate(
-    # IPCA: log-diferença (retorno mensal da inflação)
-    ipca  = c(NA, diff(log(PRECOS12_IPCA12))),
-    
-    # Selic: já é taxa, usa só diferença
-    selic = c(NA, diff(BM12_TJOVER12)),
-    
-    # Câmbio: log-diferença (variação percentual)
-    cambio = c(NA, diff(log(GM366_ERV366)))
+    ipca        = c(NA, diff(log(PRECOS12_IPCA12))),  # Variação mensal do IPCA
+    selic       = c(NA, diff(BM12_TJOVER12)),          # Variação da Selic
+    cambio      = c(NA, diff(log(GM366_ERV366))),      # Variação % do câmbio
+    uci         = c(NA, diff(uci)),                    # Variação da cap. instalada
+    carne       = c(NA, diff(log(IFS12_BEEFB12))),     # Variação % da carne
+    petroleo    = c(NA, diff(log(IFS12_PETROLEUM12))), # Variação % do petróleo
+    soja        = c(NA, diff(log(IFS12_SOJAGP12))),    # Variação % da soja
+    sal_min     = c(NA, diff(log(GAC12_SALMINRE12))),  # Variação % do salário
+    exp_ipca    = c(NA, diff(exp_ipca)),               # Variação da expectativa
+    result_prim = c(NA, diff(result_primario)),        # Variação do resultado
+    agr_mon     = agr_monetario                        # Já é variação %
   ) %>%
-  select(date, ipca, selic, cambio) %>%
-  filter(!is.na(ipca))  # Remove o NA gerado pela diferença
+  select(date, ipca, selic, cambio, uci, carne,
+         petroleo, soja, sal_min, exp_ipca, result_prim, agr_mon) %>%
+  filter(!is.na(ipca))
 
-# Visualiza após transformação
-par(mfrow = c(3, 1))
-plot(df_transf$date, df_transf$ipca,   type = "l", main = "IPCA (log-diff)")
-plot(df_transf$date, df_transf$selic,  type = "l", main = "Selic (diff)")
-plot(df_transf$date, df_transf$cambio, type = "l", main = "Câmbio (log-diff)")
-par(mfrow = c(1, 1))
+# 2.1 - Teste ADF para todas as séries
+series_testar <- names(df_transf)[-1] # Remove coluna date
 
-# Testa estacionariedade
-adf_ipca   <- ur.df(df_transf$ipca,   type = "drift", lags = 12, selectlags = "BIC")
-adf_selic  <- ur.df(df_transf$selic,  type = "drift", lags = 12, selectlags = "BIC")
-adf_cambio <- ur.df(df_transf$cambio, type = "drift", lags = 12, selectlags = "BIC")
+cat("== Teste ADF de Estacionariedade ==\n")
+for(s in series_testar) {
+  x <- na.omit(df_transf[[s]])
+  adf <- ur.df(x, type = "drift", lags = 12, selectlags = "BIC")
+  stat <- adf@teststat[1]
+  crit <- adf@cval[1, 2] # Valor crítico 5%
+  resultado <- ifelse(stat < crit, "Estacionária", "Não estacionária")
+  cat(s, "estatistica:", round(stat, 2),
+      "| critico 5%:", crit, "|", resultado, "\n")
+}
 
-cat("=== ADF - IPCA ===\n");   print(summary(adf_ipca))
-cat("=== ADF - Selic ===\n");  print(summary(adf_selic))
-cat("=== ADF - Câmbio ===\n"); print(summary(adf_cambio))
+# =============================================================
+# 3. Benchmark ARIMA
+# =============================================================
 
-##########################
-# ARIMA Benchmark
-##########################
-library(forecast)
-
-# Série alvo: IPCA transformado
-ipca_ts <- ts(df_transf$ipca, 
-              start = c(1996, 2),  # começa em fev/1996 por causa do diff
+# 3.1 - Converte IPCA para série temporal
+ipca_ts <- ts(df_transf$ipca,
+              start = c(1996, 2),
               frequency = 12)
 
-# Janela inicial de estimação: até dez/2015 (~70% da amostra)
-# Janela de avaliação: jan/2016 a dez/2025
-train_end   <- c(2015, 12)
-test_start  <- c(2016,  1)
+# 3.2 - Define janelas de treino e teste
+# Treino: jan/1996 a dez/2015
+# Teste:  jan/2016 a dez/2025
+train_end <- c(2015, 12)
 
-# Índices
 n_total <- length(ipca_ts)
 n_train <- length(window(ipca_ts, end = train_end))
-n_test  <- n_total - n_train
+n_test <- n_total - n_train
 
-# Horizontes de previsão
+# 3.3 - Expanding window com ARIMA
 horizontes <- c(1, 3, 6, 12)
 
-# Armazena resultados
-resultados <- data.frame(
+resultados_arima <- data.frame(
   horizonte = horizontes,
   RMSE = NA,
-  MAE  = NA
+  MAE = NA
 )
 
 for (h in horizontes) {
   erros <- c()
   
   for (i in 0:(n_test - h)) {
-    # Expanding window
-    train <- window(ipca_ts, end = time(ipca_ts)[n_train + i])
-    real  <- window(ipca_ts, 
-                    start = time(ipca_ts)[n_train + i + 1],
-                    end   = time(ipca_ts)[n_train + i + h])
-    
-    # Estima ARIMA automaticamente
+    train  <- window(ipca_ts, end = time(ipca_ts)[n_train + i])
+    real   <- window(ipca_ts,
+                     start = time(ipca_ts)[n_train + i + 1],
+                     end   = time(ipca_ts)[n_train + i + h])
     modelo <- auto.arima(train, seasonal = TRUE)
-    
-    # Previsão h passos à frente
-    prev <- forecast(modelo, h = h)$mean
-    
-    # Erro apenas no último passo (h-step ahead)
-    erros <- c(erros, real[h] - prev[h])
+    prev   <- forecast(modelo, h = h)$mean
+    erros  <- c(erros, real[h] - prev[h])
   }
   
-  resultados[resultados$horizonte == h, "RMSE"] <- sqrt(mean(erros^2))
-  resultados[resultados$horizonte == h, "MAE"]  <- mean(abs(erros))
+  resultados_arima[resultados_arima$horizonte == h, "RMSE"] <- sqrt(mean(erros^2))
+  resultados_arima[resultados_arima$horizonte == h, "MAE"]  <- mean(abs(erros))
 }
 
-print(resultados)
+# 3.4 - Resultados
+cat("\n== Benchmark ARIMA - Resultados Out-of-Sample ==\n")
+print(resultados_arima)
+
+colSums(is.na(df_final))  # Checa NAs
