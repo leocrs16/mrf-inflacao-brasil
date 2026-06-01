@@ -1,193 +1,177 @@
-# =============================================================
-# Previsão da Inflação Brasileira com MRF
-# SINAPE 2026
-# Autores: Leonardo Carvalho Ribeiro da Silva
-#          Hudson da Silva Torrent
-# =============================================================
-
-# =============================================================
-# 0 - Configuração
-# =============================================================
 rm(list = ls())
 
 library(MacroRF)
 library(dplyr)
 
-source("functions/construir_dados.R")
-source("functions/janela_fixa.R")
-source("functions/janela_expansivel.R")
+source("functions/build_data.R")
+source("functions/fixed_window.R")
+source("functions/expanding_window.R")
 
-load("data/df_transf.rda")
+load("data/02_transformations.rda")
 
 # =============================================================
 # 4 - Macroeconomic Random Forest (MRF)
 # =============================================================
-# O MRF generaliza o ARIMA permitindo que os coeficientes
-# variem no tempo (GTVPs) conforme o estado da economia
-# Referência: Goulet Coulombe (2024)
+# MRF generalizes ARIMA by allowing coefficients to vary
+# over time (GTVPs) according to the state of the economy
+# Reference: Goulet Coulombe (2024)
 
-# 4.1 - Prepara o dataframe no formato esperado
-# IPCA deve ser a primeira coluna
-# Datas como rownames — exigido pelas funções auxiliares
+# =============================================================
+# 4.1 - Prepare dataset
+# =============================================================
+# IPCA must be the first column
+# Dates as rownames — required by auxiliary functions
 
 df_mrf <- df_transf %>%
-  select(date, ipca, selic, cambio, uci, carne,
-         petroleo, soja, sal_min, exp_ipca, result_prim, agr_mon) %>%
+  select(date, ipca_headline, everything()) %>%
   na.omit()
 
-rownames_datas <- format(df_mrf$date, "%Y-%m")
+rownames_dates <- format(df_mrf$date, "%Y-%m")
 df_mrf <- df_mrf %>% select(-date)
-rownames(df_mrf) <- rownames_datas
-df_mrf <- df_mrf %>% select(ipca, everything())
+rownames(df_mrf) <- rownames_dates
 
-cat("Dimensões do dataset:", dim(df_mrf), "\n")
-cat("Período:", rownames(df_mrf)[1], "a", rownames(df_mrf)[nrow(df_mrf)], "\n")
+cat("Dataset dimensions:", dim(df_mrf), "\n")
+cat("Period:", rownames(df_mrf)[1], "to", rownames(df_mrf)[nrow(df_mrf)], "\n")
 
-# 4.2 - Define número de observações out-of-sample
-# jan/2016 a dez/2025 = 120 meses = 10 anos
+# =============================================================
+# 4.2 - Define out-of-sample period
+# =============================================================
+# Jan/2016 to Dec/2025 = 120 months = 10 years
+
 n_oos <- 120
 
-cat("Observações totais:", nrow(df_mrf), "\n")
-cat("Treino:", nrow(df_mrf) - n_oos, "| Teste:", n_oos, "\n")
+cat("Total observations:", nrow(df_mrf), "\n")
+cat("Training:", nrow(df_mrf) - n_oos, "| Test:", n_oos, "\n")
 
 # =============================================================
 # 4.3 - Fixed Window
 # =============================================================
-# Estima o MRF uma única vez com toda a amostra de treino
-# Mais rápido — bom para exploração inicial e resultados rápidos
+# Estimates MRF once with full training sample
+# Faster — good for initial exploration
 
-cat("\n=== Rodando Fixed Window ===\n")
+cat("\n=== Running Fixed Window ===\n")
 
-lista_modelos_fxd <- list()
+models_fxd <- list()
 
 for (h in 1:12) {
-  cat("Horizonte", h, "\n")
-  lista_modelos_fxd[[h]] <- janela_fixa(
-    dados             = df_mrf,
-    especificacao     = "FAARRF",
-    n_lags_y          = 4,  # lags do IPCA no S_t
-    n_lags_vars       = 2,  # lags de cada variável no S_t
-    n_lags_fatores    = 4,  # lags dos 5 fatores PCA
-    n_lags_maf        = 4,  # lags para construir MAFs
-    n_componentes_maf = 2,  # componentes MAF por variável
-    horizonte         = h,
-    n_oos             = n_oos
+  cat("Horizon", h, "\n")
+  models_fxd[[h]] <- fixed_window(
+    data             = df_mrf,
+    specification    = "FAARRF",
+    n_lags_y         = 4,   # lags of IPCA in S_t
+    n_lags_vars      = 2,   # lags of each variable in S_t
+    n_lags_factors   = 4,   # lags of 5 PCA factors
+    n_lags_maf       = 4,   # lags to build MAFs
+    n_maf_components = 2,   # MAF components per variable
+    horizon          = h,
+    n_oos            = n_oos
   )
 }
 
-# 4.4 - Extrai e acumula previsões (fixed window)
-# Cada modelo gera previsão de 1 passo para seu horizonte
-# acumular_previsoes() calcula as diagonais para h=3,6,12
-previsoes_fxd <- Reduce(cbind, lapply(lista_modelos_fxd, function(x) x$pred))
-previsoes_fxd <- acumular_previsoes(previsoes_fxd)
+# 4.4 - Extract and accumulate forecasts (fixed window)
+forecasts_fxd <- Reduce(cbind, lapply(models_fxd, function(x) x$pred))
+forecasts_fxd <- accumulate_forecasts(forecasts_fxd)
 
-cat("\n=== Fixed Window - Primeiras previsões ===\n")
-print(head(previsoes_fxd))
+cat("\n=== Fixed Window — First forecasts ===\n")
+print(head(forecasts_fxd))
 
-save(lista_modelos_fxd, file = "data/lista_modelos_fxd.rda")
-save(previsoes_fxd,     file = "data/previsoes_fxd.rda")
+save(models_fxd,    file = "data/04_models_fxd.rda")
+save(forecasts_fxd, file = "data/04_forecasts_fxd.rda")
 
 # =============================================================
 # 4.5 - Expanding Window
 # =============================================================
-# Re-estima o MRF a cada 12 meses com janela crescente
-# Mais robusto — comparável à expanding window do ARIMA
+# Re-estimates MRF every 12 months with growing window
+# More robust — comparable to ARIMA expanding window
 
-cat("\n=== Rodando Expanding Window ===\n")
-cat("Isso pode demorar bastante — re-estima a cada 12 meses\n")
+cat("\n=== Running Expanding Window ===\n")
+cat("This may take a while — re-estimates every 12 months\n")
 
-lista_modelos_exp <- list()
+models_exp <- list()
 
 for (h in 1:12) {
-  cat("Horizonte", h, "\n")
-  lista_modelos_exp[[h]] <- janela_expansivel(
-    dados             = df_mrf,
-    especificacao     = "FAARRF",
-    n_lags_y          = 4,
-    n_lags_vars       = 2,
-    n_lags_fatores    = 4,
-    n_lags_maf        = 4,
-    n_componentes_maf = 2,
-    horizonte         = h,
-    n_oos             = n_oos
+  cat("Horizon", h, "\n")
+  models_exp[[h]] <- expanding_window(
+    data             = df_mrf,
+    specification    = "FAARRF",
+    n_lags_y         = 4,
+    n_lags_vars      = 2,
+    n_lags_factors   = 4,
+    n_lags_maf       = 4,
+    n_maf_components = 2,
+    horizon          = h,
+    n_oos            = n_oos
   )
 }
 
-# 4.6 - Extrai e acumula previsões (expanding window)
-# Para cada horizonte, coleta as previsões de cada janela anual
-horizonte_prevs <- list()
+# 4.6 - Extract and accumulate forecasts (expanding window)
+horizon_forecasts <- list()
 for (h in 1:12) {
-  horizonte_prevs[[h]] <- lapply(lista_modelos_exp[[h]], function(x) x$pred)
+  horizon_forecasts[[h]] <- lapply(models_exp[[h]], function(x) x$pred)
 }
 
-series_prevs  <- lapply(horizonte_prevs, function(h) unlist(h))
-previsoes_exp <- do.call(cbind, series_prevs)
-previsoes_exp <- acumular_previsoes(previsoes_exp)
+forecast_series <- lapply(horizon_forecasts, function(h) unlist(h))
+forecasts_exp   <- do.call(cbind, forecast_series)
+forecasts_exp   <- accumulate_forecasts(forecasts_exp)
 
-cat("\n=== Expanding Window - Primeiras previsões ===\n")
-print(head(previsoes_exp))
+cat("\n=== Expanding Window — First forecasts ===\n")
+print(head(forecasts_exp))
 
-save(lista_modelos_exp, file = "data/lista_modelos_exp.rda")
-save(previsoes_exp,     file = "data/previsoes_exp.rda")
+save(models_exp,    file = "data/04_models_exp.rda")
+save(forecasts_exp, file = "data/04_forecasts_exp.rda")
 
 # =============================================================
-# 4.7 - Calcula métricas de acurácia
+# 4.7 - Compute accuracy metrics
 # =============================================================
 
-load("data/resultados_arima.rda")
+load("data/03_arima.rda")
 
-# IPCA realizado no período de teste
-ipca_real <- tail(df_mrf$ipca, n_oos)
+# Realized IPCA in test period
+ipca_actual <- tail(df_mrf$ipca_headline, n_oos)
 
-# Função auxiliar para calcular RMSE e MAE
-calcular_metricas <- function(previsoes, real, horizontes = c(1, 3, 6, 12)) {
-  resultado <- data.frame(horizonte = horizontes, RMSE = NA, MAE = NA)
+# Auxiliary function to compute RMSE and MAE
+compute_metrics <- function(forecasts, actual, horizons = c(1, 3, 6, 12)) {
+  result <- data.frame(horizon = horizons, RMSE = NA, MAE = NA)
   
-  for (h in horizontes) {
+  for (h in horizons) {
+    col <- switch(as.character(h),
+                  "1"  = "h1",
+                  "3"  = "acc3",
+                  "6"  = "acc6",
+                  "12" = "acc12")
     
+    # Compute accumulated actual for h > 1
     if (h == 1) {
-      # Previsão direta — compara com IPCA mensal real
-      prev  <- previsoes[, "h1"]
-      erros <- real - prev
-      erros <- erros[!is.na(erros)]
-      
+      actual_h <- actual
     } else {
-      # Previsão acumulada — compara com IPCA acumulado real
-      col  <- switch(as.character(h),
-                     "3"  = "acc3",
-                     "6"  = "acc6",
-                     "12" = "acc12")
-      prev <- previsoes[, col]
-      
-      # Calcula IPCA acumulado real com a mesma lógica diagonal
-      n <- length(real)
-      real_acc <- c(rep(NA, h - 1), sapply(seq_len(n - h + 1), function(t) {
-        prod(1 + real[t:(t + h - 1)]) - 1
+      n <- length(actual)
+      actual_h <- c(rep(NA, h - 1), sapply(seq_len(n - h + 1), function(t) {
+        prod(1 + actual[t:(t + h - 1)]) - 1
       }))
-      
-      erros <- real_acc - prev
-      erros <- erros[!is.na(erros)]
     }
     
-    resultado[resultado$horizonte == h, "RMSE"] <- sqrt(mean(erros^2))
-    resultado[resultado$horizonte == h, "MAE"]  <- mean(abs(erros))
+    prev  <- forecasts[, col]
+    errors <- actual_h - prev
+    errors <- errors[!is.na(errors)]
+    
+    result[result$horizon == h, "RMSE"] <- sqrt(mean(errors^2))
+    result[result$horizon == h, "MAE"]  <- mean(abs(errors))
   }
   
-  return(resultado)
+  return(result)
 }
 
-resultados_mrf_fxd <- calcular_metricas(previsoes_fxd, ipca_real)
-resultados_mrf_exp <- calcular_metricas(previsoes_exp, ipca_real)
+results_mrf_fxd <- compute_metrics(forecasts_fxd, ipca_actual)
+results_mrf_exp <- compute_metrics(forecasts_exp, ipca_actual)
 
-# 4.8 - Tabela comparativa final
-cat("\n=== Comparação Final: ARIMA vs MRF ===\n")
-cat("\nARIMA:\n")
-print(resultados_arima)
-cat("\nMRF Fixed Window:\n")
-print(resultados_mrf_fxd)
-cat("\nMRF Expanding Window:\n")
-print(resultados_mrf_exp)
+# 4.8 - Final comparison table
+cat("\n=== Final Comparison: ARIMA vs MRF ===\n")
+cat("\nARIMA:\n");               print(results_arima)
+cat("\nMRF Fixed Window:\n");    print(results_mrf_fxd)
+cat("\nMRF Expanding Window:\n"); print(results_mrf_exp)
 
-# 4.9 - Salva resultados
-save(resultados_mrf_fxd, file = "data/resultados_mrf_fxd.rda")
-save(resultados_mrf_exp, file = "data/resultados_mrf_exp.rda")
+# 4.9 - Save results
+save(results_mrf_fxd, file = "data/04_results_mrf_fxd.rda")
+save(results_mrf_exp, file = "data/04_results_mrf_exp.rda")
+
+cat("\nSaved all MRF results to data/\n")
