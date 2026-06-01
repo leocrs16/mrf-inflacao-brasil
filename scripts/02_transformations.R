@@ -75,12 +75,16 @@ for (s in series_testar) {
 # agr_mon:     -5.43  < -2.87 
 
 # 2.3 - Visualização das séries transformadas
-par(mfrow = c(4, 3))
-for (s in series_testar) {
-  plot(df_transf$date, df_transf[[s]],
-       type = "l", main = s, xlab = "", ylab = "")
-}
-par(mfrow = c(1, 1))
+library(ggplot2)
+library(tidyr)
+
+df_transf %>%
+  pivot_longer(-date, names_to = "serie", values_to = "valor") %>%
+  ggplot(aes(x = date, y = valor)) +
+  geom_line() +
+  facet_wrap(~ serie, ncol = 3, scales = "free_y") +
+  labs(title = "Séries transformadas", x = NULL, y = NULL) +
+  theme_minimal()
 
 # 2.4 - Salva dataset transformado
 save(df_transf, file = "data/df_transf.rda")
