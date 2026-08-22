@@ -24,8 +24,8 @@ track when the gains occur.
 - **141 macroeconomic variables**, monthly, no missing values
 - **Sources**: BCB (SGS and Olinda/Focus), Ipeadata, FRED, Yahoo Finance,
   NOAA, Economic Policy Uncertainty
-- **Period**: January 2003 – December 2025 (276 observations)
-- **Test window**: January 2016 – December 2025 (120 months)
+- **Period**: January 2003 - December 2025 (276 observations)
+- **Test window**: January 2016 - December 2025 (120 months)
 
 ## Repository Structure
 
@@ -47,9 +47,9 @@ track when the gains occur.
 | `fixed_window.R` | Fixed window estimation |
 | `expanding_window.R` | Expanding window estimation |
 
-**data/** — intermediate `.rda` files
+**data/** - intermediate `.rda` files
 
-**output/** — result tables (`.csv`) and figures (`.png`)
+**output/** - result tables (`.csv`) and figures (`.png`)
 
 Note: `data/04_models_*.rda` are not versioned due to file size (93 MB).
 Run `scripts/04_mrf.R` to regenerate them. The forecast and result objects
@@ -57,7 +57,7 @@ required by `scripts/05_results.R` are included in the repository.
 
 ## Results
 
-Out-of-sample RMSE, test period 2016–2025:
+Out-of-sample RMSE, test period 2016-2025:
 
 | Horizon | ARIMA | MRF fixed | MRF expanding |
 |---|---|---|---|
@@ -88,11 +88,11 @@ inflation forecasting in Brazil: New contenders versus classical models.
 *Latin American Journal of Central Banking*.
 
 Diebold, F. X. & Mariano, R. S. (1995). Comparing predictive accuracy.
-*Journal of Business and Economic Statistics*, 13(3), 253–263.
+*Journal of Business and Economic Statistics*, 13(3), 253-263.
 
 Goulet Coulombe, P. (2024). The macroeconomy as a random forest.
-*Journal of Applied Econometrics*, 39(3), 401–421.
+*Journal of Applied Econometrics*, 39(3), 401-421.
 
 Stock, J. H. & Watson, M. W. (2002). Forecasting using principal components
 from a large number of predictors. *Journal of the American Statistical
-Association*, 97(460), 1167–1179.
+Association*, 97(460), 1167-1179.
