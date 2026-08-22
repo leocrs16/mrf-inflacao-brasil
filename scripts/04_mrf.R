@@ -24,10 +24,15 @@ load("data/02_transformations.rda")
 
 df_mrf <- df_transf %>%
   select(date, ipca_headline, everything()) %>%
-  na.omit()
+  na.omit() %>%
+  as.data.frame()
 
 rownames_dates <- format(df_mrf$date, "%Y-%m")
 df_mrf <- df_mrf %>% select(-date)
+rownames(df_mrf) <- rownames_dates
+
+# Force full materialization — avoids dplyr lazy evaluation issues
+df_mrf <- as.data.frame(lapply(df_mrf, as.numeric))
 rownames(df_mrf) <- rownames_dates
 
 cat("Dataset dimensions:", dim(df_mrf), "\n")
@@ -47,7 +52,6 @@ cat("Training:", nrow(df_mrf) - n_oos, "| Test:", n_oos, "\n")
 # 4.3 - Fixed Window
 # =============================================================
 # Estimates MRF once with full training sample
-# Faster — good for initial exploration
 
 cat("\n=== Running Fixed Window ===\n")
 
@@ -68,9 +72,14 @@ for (h in 1:12) {
   )
 }
 
-# 4.4 - Extract and accumulate forecasts (fixed window)
+# =============================================================
+# 4.4 - Extract forecasts (fixed window)
+# =============================================================
+# Column h contains predictions for the same 120 target months
+# (Jan/2016 - Dec/2025), made h months in advance
+
 forecasts_fxd <- Reduce(cbind, lapply(models_fxd, function(x) x$pred))
-forecasts_fxd <- accumulate_forecasts(forecasts_fxd)
+colnames(forecasts_fxd) <- paste0("h", 1:12)
 
 cat("\n=== Fixed Window — First forecasts ===\n")
 print(head(forecasts_fxd))
@@ -82,7 +91,6 @@ save(forecasts_fxd, file = "data/04_forecasts_fxd.rda")
 # 4.5 - Expanding Window
 # =============================================================
 # Re-estimates MRF every 12 months with growing window
-# More robust — comparable to ARIMA expanding window
 
 cat("\n=== Running Expanding Window ===\n")
 cat("This may take a while — re-estimates every 12 months\n")
@@ -104,7 +112,10 @@ for (h in 1:12) {
   )
 }
 
-# 4.6 - Extract and accumulate forecasts (expanding window)
+# =============================================================
+# 4.6 - Extract forecasts (expanding window)
+# =============================================================
+
 horizon_forecasts <- list()
 for (h in 1:12) {
   horizon_forecasts[[h]] <- lapply(models_exp[[h]], function(x) x$pred)
@@ -112,7 +123,7 @@ for (h in 1:12) {
 
 forecast_series <- lapply(horizon_forecasts, function(h) unlist(h))
 forecasts_exp   <- do.call(cbind, forecast_series)
-forecasts_exp   <- accumulate_forecasts(forecasts_exp)
+colnames(forecasts_exp) <- paste0("h", 1:12)
 
 cat("\n=== Expanding Window — First forecasts ===\n")
 print(head(forecasts_exp))
@@ -123,35 +134,19 @@ save(forecasts_exp, file = "data/04_forecasts_exp.rda")
 # =============================================================
 # 4.7 - Compute accuracy metrics
 # =============================================================
+# Direct h-step-ahead point forecasts, same metric as ARIMA benchmark
 
 load("data/03_arima.rda")
 
 # Realized IPCA in test period
 ipca_actual <- tail(df_mrf$ipca_headline, n_oos)
 
-# Auxiliary function to compute RMSE and MAE
 compute_metrics <- function(forecasts, actual, horizons = c(1, 3, 6, 12)) {
   result <- data.frame(horizon = horizons, RMSE = NA, MAE = NA)
   
   for (h in horizons) {
-    col <- switch(as.character(h),
-                  "1"  = "h1",
-                  "3"  = "acc3",
-                  "6"  = "acc6",
-                  "12" = "acc12")
-    
-    # Compute accumulated actual for h > 1
-    if (h == 1) {
-      actual_h <- actual
-    } else {
-      n <- length(actual)
-      actual_h <- c(rep(NA, h - 1), sapply(seq_len(n - h + 1), function(t) {
-        prod(1 + actual[t:(t + h - 1)]) - 1
-      }))
-    }
-    
-    prev  <- forecasts[, col]
-    errors <- actual_h - prev
+    pred   <- forecasts[, paste0("h", h)]
+    errors <- actual - pred
     errors <- errors[!is.na(errors)]
     
     result[result$horizon == h, "RMSE"] <- sqrt(mean(errors^2))
@@ -164,13 +159,17 @@ compute_metrics <- function(forecasts, actual, horizons = c(1, 3, 6, 12)) {
 results_mrf_fxd <- compute_metrics(forecasts_fxd, ipca_actual)
 results_mrf_exp <- compute_metrics(forecasts_exp, ipca_actual)
 
+# =============================================================
 # 4.8 - Final comparison table
+# =============================================================
 cat("\n=== Final Comparison: ARIMA vs MRF ===\n")
-cat("\nARIMA:\n");               print(results_arima)
-cat("\nMRF Fixed Window:\n");    print(results_mrf_fxd)
+cat("\nARIMA:\n");                print(results_arima)
+cat("\nMRF Fixed Window:\n");     print(results_mrf_fxd)
 cat("\nMRF Expanding Window:\n"); print(results_mrf_exp)
 
+# =============================================================
 # 4.9 - Save results
+# =============================================================
 save(results_mrf_fxd, file = "data/04_results_mrf_fxd.rda")
 save(results_mrf_exp, file = "data/04_results_mrf_exp.rda")
 
