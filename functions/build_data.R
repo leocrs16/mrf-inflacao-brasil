@@ -15,9 +15,16 @@ build_st <- function(data, n_lags_y, n_lags_vars,
                      n_maf_components) {
   
   data  <- as.data.frame(data)
-  y     <- data[, 1]
-  x     <- data[, 2:ncol(data)]
+  y     <- as.numeric(data[, 1])
+  x     <- as.data.frame(data[, 2:ncol(data)])
   dates <- rownames(data)
+  
+  cat("DEBUG — dim(data):", dim(data), "\n")
+  cat("DEBUG — class(x):", class(x), "\n")
+  cat("DEBUG — ncol(x):", ncol(x), "\n")
+  cat("DEBUG — class(x[[1]]):", class(x[[1]]), "\n")
+  cat("DEBUG — n_lags_vars:", n_lags_vars, "\n")
+
   
   # --- F1.1 Lags of y ---
   # embed() creates a matrix where each column is a lag of the series
@@ -29,7 +36,8 @@ build_st <- function(data, n_lags_y, n_lags_vars,
   # --- F1.2 Lags of each predictor variable ---
   # For each variable, creates n_lags_vars lags
   predictor_lags <- lapply(colnames(x), function(var) {
-    m <- embed(x[[var]], n_lags_vars + 1)[, -1, drop = FALSE]
+    serie <- as.numeric(x[[var]])
+    m <- embed(serie, n_lags_vars + 1)[, -1, drop = FALSE]
     colnames(m) <- paste0(var, "_L", seq_len(n_lags_vars))
     m
   })
@@ -60,8 +68,8 @@ build_st <- function(data, n_lags_y, n_lags_vars,
   # via PCA applied to the variable's own lags
   # Analogous to cross-sectional PCA but in the temporal dimension
   maf_list <- lapply(colnames(data), function(var) {
-    series    <- data[[var]]
-    var_lags  <- embed(series, n_lags_maf + 1)[, -1]
+    series   <- as.numeric(data[[var]])
+    var_lags <- embed(series, n_lags_maf + 1)[, -1]
     rownames(var_lags) <- dates[-seq_len(n_lags_maf)]
     
     pca_var  <- prcomp(var_lags, center = TRUE, scale. = TRUE)
@@ -96,7 +104,7 @@ build_st <- function(data, n_lags_y, n_lags_vars,
 build_xt_faarrf <- function(data) {
   
   data  <- as.data.frame(data)
-  y     <- data[, 1]
+  y     <- as.numeric(data[, 1])
   dates <- rownames(data)
   
   # 2 lags of y
@@ -105,7 +113,7 @@ build_xt_faarrf <- function(data) {
   colnames(lags_y) <- c("y_t1", "y_t2")
   
   # 1 lag of first 2 PCA factors
-  pca_data <- prcomp(data, center = TRUE, scale. = TRUE)
+  pca_data <- prcomp(as.data.frame(data), center = TRUE, scale. = TRUE)
   factors2 <- pca_data$x[, 1:2]
   
   lags_f <- embed(factors2, 2)[, -(1:2)]
@@ -130,7 +138,7 @@ build_xt_faarrf <- function(data) {
 build_xt_4lags <- function(data) {
   
   data  <- as.data.frame(data)
-  y     <- data[, 1]
+  y     <- as.numeric(data[, 1])
   dates <- rownames(data)
   
   # 4 lags of y
@@ -139,7 +147,7 @@ build_xt_4lags <- function(data) {
   colnames(lags_y) <- c("y_t1", "y_t2", "y_t3", "y_t4")
   
   # 2 lags of first 2 PCA factors
-  pca_data <- prcomp(data, center = TRUE, scale. = TRUE)
+  pca_data <- prcomp(as.data.frame(data), center = TRUE, scale. = TRUE)
   factors2 <- pca_data$x[, 1:2]
   
   lags_f <- embed(factors2, 3)[, -(1:2)]
@@ -177,11 +185,11 @@ build_mrf_dataset <- function(data, specification, n_lags_y,
   
   # Build S_t
   st <- build_st(data,
-                 n_lags_y          = n_lags_y,
-                 n_lags_vars       = n_lags_vars,
-                 n_lags_factors    = n_lags_factors,
-                 n_lags_maf        = n_lags_maf,
-                 n_maf_components  = n_maf_components)
+                 n_lags_y         = n_lags_y,
+                 n_lags_vars      = n_lags_vars,
+                 n_lags_factors   = n_lags_factors,
+                 n_lags_maf       = n_lags_maf,
+                 n_maf_components = n_maf_components)
   
   # Align X_t and S_t
   blocks <- list(xt, st)
@@ -192,7 +200,7 @@ build_mrf_dataset <- function(data, specification, n_lags_y,
   # Adjust target for horizon h
   # For h=1: use y_{t+1} (next period)
   # For h>1: shift y h periods forward
-  y_series <- as.data.frame(data[, 1])
+  y_series <- as.data.frame(as.numeric(data[, 1]))
   colnames(y_series) <- "y"
   y_series <- tail(y_series, N)
   

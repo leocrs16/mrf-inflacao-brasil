@@ -50,3 +50,9 @@ rsconnect/
 
 # Ignore API
 .Renviron
+
+# Ignore
+data/04_models_exp.rda
+data/04_models_fxd.rda
+collection_report.csv
+validation_checks.csv
